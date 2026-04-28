@@ -1,0 +1,481 @@
+---
+title: "robust_tests"
+author: "ID_234731"
+date: "2026-04-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include = F}
+library(dplyr)
+library(tidyverse) 
+library(ggplot2)
+library(haven)
+library(zoo)
+library(stargazer)
+library(corrplot)
+library(psych)
+library(modelsummary)
+library(rdrobust)
+library(rddtools)
+library(fixest)
+library(purrr)
+library(gt)
+library(rddensity)
+library(knitr)
+library(sandwich)
+library(lmtest)
+library(flextable)
+library(officer)
+
+
+```
+
+```{r load data, include = F}
+
+cog_test_sgl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_sgl.rds")
+
+cog_test_svrl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_svrl.rds")
+
+
+```
+
+
+# McCrary Density Test
+
+```{r}
+
+cog_test_sgl$age_running <- cog_test_sgl$age - cog_test_sgl$sra
+
+test <- rddensity(cog_test_sgl$age_running, c = 0)
+
+summary(test)
+
+
+```
+
+
+
+```{r}
+rdplotdensity(test, cog_test_sgl$age_running, )
+
+
+
+results_table <- data.frame(
+  Test = "McCrary density test",
+  Statistic = round(1.3538, 2),
+  `p-value` = round(0.1758, 3)
+)
+
+kable(
+  results_table,
+  align = "lcc",
+  caption = "Density discontinuity test at the retirement threshold"
+)
+```
+
+```{r}
+rdplotdensity(
+  rdd = test,
+  X = cog_test_sgl$age_running,
+  
+  xlab = "Age relative to statutory retirement age (years)",
+  ylab = "Density of observations",
+)
+
+#  title = "Density of Age Around the Retirement Threshold"
+
+```
+```{r}
+library(officer)
+
+doc <- read_docx() |>
+  body_add_par("Figure X: Density of Age Around the Statutory Retirement Age Threshold",
+               style = "Normal") |>
+  body_add_img(
+    src = "density_test_sra.png",
+    width = 6,
+    height = 4
+  ) |>
+  body_add_par(
+    "Notes: The figure displays the density of the running variable (age relative to the statutory retirement age). The absence of a discontinuity supports the assumption that individuals cannot precisely manipulate their position relative to the cutoff.",
+    style = "Normal"
+  )
+
+print(doc, target = "density_test_sra.docx")
+```
+
+
+
+
+
+## Covariate Smoothness
+
+
+```{r}
+library(lmtest)
+library(sandwich)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(flextable)
+library(officer)
+
+cog_test_sgl$early_dist <- cog_test_sgl$age - cog_test_sgl$early #setting individual cutoffs
+cog_test_sgl$sra_dist <- cog_test_sgl$age - cog_test_sgl$sra
+cog_test_sgl$weight_sra <- pmax(0,1 - abs(cog_test_sgl$sra_dist) / 5)
+
+
+covariates <- c("sex", "edu_time", "manual_worker", "married")
+
+results_cov <- data.frame()
+
+for (cov in covariates) {
+  tryCatch({
+    
+    fs_cov <- lm(as.formula(paste(cov,
+                   "~ eligible_sra +
+                      eligible_sra:sra_dist +
+                      sra_dist")),
+                 data    = cog_test_sgl,
+                 weights = weight_sra)
+    
+    res <- coeftest(fs_cov, vcov = vcovHC(fs_cov, type = "HC1"))
+    
+    coef  <- res["eligible_sra",1]
+    se    <- res["eligible_sra",2]
+    pval  <- res["eligible_sra",4]
+    
+    mean_below <- weighted.mean(
+      cog_test_sgl[[cov]][cog_test_sgl$eligible_sra == 0],
+      cog_test_sgl$weight_sra[cog_test_sgl$eligible_sra == 0],
+      na.rm = TRUE
+    )
+    
+    results_cov <- rbind(results_cov, data.frame(
+      variable = cov,
+      coef     = coef,
+      se       = se,
+      pvalue   = pval,
+      mean_below = mean_below
+    ))
+    
+  }, error = function(e) cat("Fehler bei Variable:", cov, "\n"))
+}
+
+
+results_cov <- results_cov %>%
+  mutate(
+    stars = case_when(
+      pvalue < 0.01 ~ "***",
+      pvalue < 0.05 ~ "**",
+      pvalue < 0.1  ~ "*",
+      TRUE ~ ""
+    ),
+    coef_se = sprintf("%.3f%s (%.3f)", coef, stars, se)
+  )
+
+
+
+table_cov <- results_cov %>%
+  mutate(
+    stars = case_when(
+      pvalue < 0.01 ~ "***",
+      pvalue < 0.05 ~ "**",
+      pvalue < 0.1  ~ "*",
+      TRUE ~ ""
+    ),
+    estimate = sprintf("%.3f%s", coef, stars),
+    se       = sprintf("(%.3f)", se),
+    mean_below = sprintf("%.3f", mean_below)
+  ) %>%
+  select(variable, estimate, se, mean_below) %>%
+  rename(
+    Variable = variable,
+    Estimate = estimate,
+    `Std. Error` = se,
+    `Mean below cutoff` = mean_below
+  )
+
+
+
+tab_cov <- flextable(table_cov)
+
+tab_cov <- tab_cov |>
+  align(j = 1, align = "left", part = "all") |>
+  align(j = 2:4, align = "center", part = "all") |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all") |>
+  border_remove() |>
+  hline_top(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "body")
+
+tab_cov <- tab_cov |>
+  add_footer_lines(
+    "Notes: The table reports discontinuity estimates from local linear regressions of predetermined covariates on the statutory retirement age eligibility indicator. Robust standard errors are shown in parentheses. * p<0.1, ** p<0.05, *** p<0.01."
+  ) |>
+  fontsize(size = 9, part = "footer") |>
+  font(fontname = "Times New Roman", part = "footer")
+
+
+doc <- read_docx() |>
+  body_add_par("Table X: Covariate Balance at the Statutory Retirement Age Cutoff",
+               style = "Normal") |>
+  body_add_flextable(tab_cov)
+
+print(doc, target = "covariate_balance_sra.docx")
+```
+
+
+## Non parametric RDD
+
+```{r}
+
+cog_test_sgl$age_running <- cog_test_sgl$age - cog_test_sgl$sra
+
+
+rd_ant <- rdrobust(
+  y = cog_test_sgl$result_ant,
+  x = cog_test_sgl$age_running,
+  weights = cog_test_sgl$weight_sra
+)
+
+rd_sdt <- rdrobust(
+  y = cog_test_sgl$result_sdt,
+  x = cog_test_sgl$age_running,
+  weights = cog_test_sgl$weight_sra
+)
+
+
+results_np <- data.frame(
+  Outcome = rep(c("ANT","SDT"), each = 3),
+  
+  Estimator = rep(
+    c("Conventional","Bias-corrected","Robust"),
+    2
+  ),
+  
+  Estimate = c(
+    rd_ant$coef[1],
+    rd_ant$coef[2],
+    rd_ant$coef[3],
+    
+    rd_sdt$coef[1],
+    rd_sdt$coef[2],
+    rd_sdt$coef[3]
+  ),
+  
+  SE = c(
+    rd_ant$se[1],
+    rd_ant$se[2],
+    rd_ant$se[3],
+    
+    rd_sdt$se[1],
+    rd_sdt$se[2],
+    rd_sdt$se[3]
+  ),
+  
+  pvalue = c(
+    rd_ant$pv[1],
+    rd_ant$pv[2],
+    rd_ant$pv[3],
+    
+    rd_sdt$pv[1],
+    rd_sdt$pv[2],
+    rd_sdt$pv[3]
+  )
+)
+
+
+results_np <- results_np %>%
+  mutate(
+    stars = case_when(
+      pvalue < 0.01 ~ "***",
+      pvalue < 0.05 ~ "**",
+      pvalue < 0.1 ~ "*",
+      TRUE ~ ""
+    ),
+    
+    Estimate = sprintf("%.3f%s", Estimate, stars),
+    SE = sprintf("(%.3f)", SE)
+  )
+
+table_np <- results_np %>%
+  mutate(Result = paste0(Estimate," ",SE)) %>%
+  select(Outcome, Estimator, Result)
+
+
+tab_np <- flextable(table_np)
+
+tab_np <- tab_np |>
+  border_remove() |>
+  hline_top(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "body") |>
+  align(j = 1:2, align = "left", part = "all") |>
+  align(j = 3, align = "center", part = "all") |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all")
+
+tab_np <- tab_np |>
+  add_footer_lines(
+    "Notes: Non-parametric regression discontinuity estimates using the rdrobust estimator."
+  ) |>
+  add_footer_lines(
+    "The table reports conventional, bias-corrected, and robust estimates with standard errors in parentheses."
+  ) |>
+  add_footer_lines(
+    "* p<0.1, ** p<0.05, *** p<0.01."
+  ) |>
+  fontsize(size = 9, part = "footer")
+
+
+doc <- read_docx() |>
+  body_add_par(
+    "Table X: Non-parametric Regression Discontinuity Estimates",
+    style = "Normal"
+  ) |>
+  body_add_flextable(tab_np)
+
+print(doc, target = "rdrobust_results.docx")
+```
+
+## Different bandwidths
+
+
+```{r}
+
+df <- cog_test_sgl %>%
+  select(result_ant, result_sdt, long_retired, eligible_sra, age_running)
+
+estimate_models <- function(data, bw){
+
+df_bw <- data %>% 
+  filter(abs(age_running) <= bw)
+
+# OLS
+ols_ant <- lm(result_ant ~ long_retired, data = df_bw)
+ols_sdt <- lm(result_sdt ~ long_retired, data = df_bw)
+
+# First stage
+first_stage <- lm(long_retired ~ eligible_sra, data = df_bw)
+
+df_bw$D_hat <- predict(first_stage)
+
+# 2SLS
+iv_ant <- lm(result_ant ~ D_hat, data = df_bw)
+iv_sdt <- lm(result_sdt ~ D_hat, data = df_bw)
+
+# robust first stage stats
+fs_robust <- coeftest(first_stage, vcov = vcovHC(first_stage,"HC1"))
+
+beta_z <- fs_robust["eligible_sra",1]
+se_z   <- fs_robust["eligible_sra",2]
+
+kp_F <- (beta_z/se_z)^2
+
+fs_F <- (coef(first_stage)["eligible_sra"] /
+         sqrt(vcov(first_stage)["eligible_sra","eligible_sra"]))^2
+
+N <- nrow(df_bw)
+
+return(list(
+  models = list(
+    "ANT OLS" = ols_ant,
+    "SDT OLS" = ols_sdt,
+    "ANT 2SLS" = iv_ant,
+    "SDT 2SLS" = iv_sdt
+  ),
+  kp = kp_F,
+  fs = fs_F,
+  N = N
+))
+}
+
+bw3 <- estimate_models(df, 3)
+bw5 <- estimate_models(df, 5)
+
+models <- list(
+  "ANT OLS (3y)" = bw3$models[[1]],
+  "SDT OLS (3y)" = bw3$models[[2]],
+  "ANT 2SLS (3y)" = bw3$models[[3]],
+  "SDT 2SLS (3y)" = bw3$models[[4]],
+
+  "ANT OLS (5y)" = bw5$models[[1]],
+  "SDT OLS (5y)" = bw5$models[[2]],
+  "ANT 2SLS (5y)" = bw5$models[[3]],
+  "SDT 2SLS (5y)" = bw5$models[[4]]
+)
+
+vcov_list <- lapply(models, vcovHC, type="HC1")
+
+extra_rows <- data.frame(
+
+term = c("First-stage F","Kleibergen-Paap F","N"),
+
+`ANT OLS (3y)` = c("", "", bw3$N),
+`SDT OLS (3y)` = c("", "", bw3$N),
+`ANT 2SLS (3y)` = c(round(bw3$fs,2), round(bw3$kp,2), bw3$N),
+`SDT 2SLS (3y)` = c(round(bw3$fs,2), round(bw3$kp,2), bw3$N),
+
+`ANT OLS (5y)` = c("", "", bw5$N),
+`SDT OLS (5y)` = c("", "", bw5$N),
+`ANT 2SLS (5y)` = c(round(bw5$fs,2), round(bw5$kp,2), bw5$N),
+`SDT 2SLS (5y)` = c(round(bw5$fs,2), round(bw5$kp,2), bw5$N)
+
+)
+
+tab <- modelsummary(
+
+models,
+
+vcov = vcov_list,
+
+statistic = "({std.error})",
+
+stars = c('*'=0.1,'**'=0.05,'***'=0.01),
+
+coef_rename = c(
+  "long_retired" = "Retired",
+  "D_hat" = "Retired"
+),
+
+gof_omit = "AIC|BIC|Log|Adj",
+
+add_rows = extra_rows,
+
+output = "flextable"
+
+)
+
+tab <- tab |>
+  border_remove() |>
+  hline_top(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "body") |>
+  align(align = "center", part = "body") |>
+  align(j = 1, align = "left", part = "all") |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all") |>
+  add_footer_lines(
+"Notes: OLS and 2SLS estimates using bandwidths of 3 and 5 years around the statutory retirement age. Robust standard errors in parentheses. ANT = Animal Naming Test, SDT = Symbol Digit Test."
+  ) |>
+  fontsize(size = 9, part = "footer")
+
+doc <- read_docx() |>
+  body_add_flextable(tab)
+
+print(doc, target = "bandwidth_robustness_ols_iv.docx")
+
+```
+
+
+
+

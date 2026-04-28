@@ -1,0 +1,1296 @@
+---
+title: "thesis_graphs_tables"
+author: "ID_234731"
+date: "2026-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include = F}
+library(dplyr)
+library(tidyverse) 
+library(ggplot2)
+library(haven)
+library(zoo)
+library(stargazer)
+library(corrplot)
+library(psych)
+library(modelsummary)
+library(rdrobust)
+library(rddtools)
+library(fixest)
+library(purrr)
+library(gt)
+library(patchwork)
+library(flextable)
+library(tibble)
+
+
+```
+
+```{r load data, include = F}
+
+cog_test_sgl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_sgl.rds")
+
+cog_test_svrl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_svrl.rds")
+
+
+```
+
+
+## Sample Summary 
+
+```{r}
+df <- cog_test_sgl |>
+
+  mutate(
+
+    # Gender
+    gender = ifelse(sex == 1, "Female", "Male"),
+
+    # Birth Cohort
+    birth_cohort = case_when(
+      birthyear >= 1936 & birthyear <= 1940 ~ "1936–40",
+      birthyear >= 1941 & birthyear <= 1945 ~ "1941–45",
+      birthyear >= 1946 & birthyear <= 1950 ~ "1946–50",
+      birthyear >= 1951 & birthyear <= 1955 ~ "1951–55",
+      birthyear >= 1956 & birthyear <= 1961 ~ "1956–61",
+      TRUE ~ NA_character_
+    ),
+
+    # Education level
+    education_level = case_when(
+      edu_time < 10 ~ "<10 years",
+      edu_time >= 10 & edu_time <= 13 ~ "10–13 years",
+      edu_time > 13 ~ ">13 years",
+      TRUE ~ NA_character_
+    ),
+
+    # Occupation
+    occupation_type = ifelse(manual_worker == 1,
+                             "Manual",
+                             "Non-manual"),
+
+    # Marital status
+    marital_status_cat = ifelse(marit_status == 1,
+                                "Married",
+                                "Not married"),
+
+    # Residence
+    residence_cat = ifelse(live_west == 1,
+                           "West Germany",
+                           "East Germany"),
+
+    # Place of birth
+    birthplace_cat = ifelse(born_abroad == 1,
+                            "Abroad",
+                            "Germany")
+
+  )
+
+
+```
+
+```{r}
+
+fmt_mean_sd <- function(x){
+
+  m <- mean(x, na.rm = TRUE)
+  s <- sd(x, na.rm = TRUE)
+
+  sprintf("%.2f (%.2f)", m, s)
+
+}
+
+fmt_count <- function(x){
+
+  n <- sum(x, na.rm = TRUE)
+  p <- 100 * n / sum(!is.na(x))
+
+  sprintf("%d (%.1f)", n, p)
+
+}
+
+N_overall <- nrow(df)
+N_emp     <- sum(df$retired == 0, na.rm = TRUE)
+N_ret     <- sum(df$retired == 1, na.rm = TRUE)
+
+table_structure <- list(
+
+"Result ANT" = list(var = "result_ant", type = "continuous"),
+"Result SDT" = list(var = "result_sdt", type = "continuous"),
+
+"Gender" = list(var = "gender", type = "categorical"),
+
+"Birth Cohort" = list(var = "birth_cohort", type = "categorical"),
+
+"Education level" = list(var = "education_level", type = "categorical"),
+
+"Type of Occupation" = list(var = "occupation_type", type = "categorical"),
+
+"Marital status" = list(var = "marital_status_cat", type = "categorical"),
+
+"Place of Residence" = list(var = "residence_cat", type = "categorical"),
+
+"Place of Birth" = list(var = "birthplace_cat", type = "categorical")
+
+)
+```
+
+```{r}
+
+tab <- imap_dfr(table_structure, function(info, label){
+
+  var <- info$var
+  type <- info$type
+
+  header <- tibble(
+    Variable = label,
+    Overall = "",
+    Employed = "",
+    Retired = ""
+  )
+
+  if(type == "continuous"){
+
+    row <- tibble(
+      Variable = paste0("  ", label),
+      Overall = fmt_mean_sd(df[[var]]),
+      Employed = fmt_mean_sd(df[[var]][df$retired == 0]),
+      Retired = fmt_mean_sd(df[[var]][df$retired == 1])
+    )
+
+    bind_rows(header, row)
+
+  } else {
+
+    levels <- sort(unique(df[[var]]))
+
+    rows <- map_dfr(levels, function(lvl){
+
+      tibble(
+        Variable = paste0("  ", lvl),
+        Overall = fmt_count(df[[var]] == lvl),
+        Employed = fmt_count(df[[var]][df$retired == 0] == lvl),
+        Retired = fmt_count(df[[var]][df$retired == 1] == lvl)
+      )
+
+    })
+
+    bind_rows(header, rows)
+
+  }
+
+})
+
+```
+
+```{r}
+
+colnames(tab) <- c(
+  "Variable",
+  paste0("Overall (N=", N_overall, ")"),
+  paste0("Employed (N=", N_emp, ")"),
+  paste0("Retired (N=", N_ret, ")")
+)
+
+tab_out <- tab |>
+
+  gt() |>
+
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      rows = !grepl("^\\s", Variable)
+    )
+  ) |>
+
+  cols_width(
+    Variable ~ px(260),
+    everything() ~ px(150)
+  ) |>
+
+  tab_options(
+    table.border.top.width = px(2),
+    column_labels.border.bottom.width = px(1)
+  )
+
+tab_out
+```
+
+##2nd
+
+```{r}
+
+
+df <- cog_test_sgl |>
+  mutate(
+    gender             = ifelse(sex == 1, "Female", "Male"),
+    birth_cohort       = case_when(
+      birthyear >= 1936 & birthyear <= 1940 ~ "1936–40",
+      birthyear >= 1941 & birthyear <= 1945 ~ "1941–45",
+      birthyear >= 1946 & birthyear <= 1950 ~ "1946–50",
+      birthyear >= 1951 & birthyear <= 1955 ~ "1951–55",
+      birthyear >= 1956 & birthyear <= 1961 ~ "1956–61",
+      TRUE ~ NA_character_
+    ),
+    education_level    = case_when(
+      edu_time < 10                        ~ "<10 years",
+      edu_time >= 10 & edu_time <= 13     ~ "10–13 years",
+      edu_time > 13                        ~ ">13 years",
+      TRUE ~ NA_character_
+    ),
+    occupation_type    = ifelse(manual_worker == 1, "Manual", "Non-manual"),
+    marital_status_cat = ifelse(marit_status == 1, "Married", "Not married"),
+    residence_cat      = ifelse(live_west == 1, "West Germany", "East Germany"),
+    birthplace_cat     = ifelse(born_abroad == 1, "Abroad", "Germany")
+  )
+
+fmt_mean_sd <- function(x) {
+  sprintf("%.2f (%.2f)", mean(x, na.rm = TRUE), sd(x, na.rm = TRUE))
+}
+
+fmt_count <- function(x, lvl) {
+  valid <- x[!is.na(x)]
+  n     <- sum(valid == lvl)
+  p     <- 100 * n / length(valid)
+  sprintf("%d (%.1f%%)", n, p)
+}
+
+N_overall <- nrow(df)
+N_emp     <- sum(df$retired == 0, na.rm = TRUE)
+N_ret     <- sum(df$retired == 1, na.rm = TRUE)
+
+table_structure <- list(
+  "Result ANT"         = list(var = "result_ant",        type = "continuous"),
+  "Result SDT"         = list(var = "result_sdt",        type = "continuous"),
+  "Gender"             = list(var = "gender",            type = "categorical"),
+  "Birth Cohort"       = list(var = "birth_cohort",      type = "categorical"),
+  "Education level"    = list(var = "education_level",   type = "categorical"),
+  "Type of Occupation" = list(var = "occupation_type",   type = "categorical"),
+  "Marital status"     = list(var = "marital_status_cat", type = "categorical"),
+  "Place of Residence" = list(var = "residence_cat",     type = "categorical"),
+  "Place of Birth"     = list(var = "birthplace_cat",    type = "categorical")
+)
+
+tab <- imap_dfr(table_structure, function(info, label) {
+  var  <- info$var
+  type <- info$type
+
+  header <- tibble(Variable = label, Overall = "", Employed = "", Retired = "")
+
+  if (type == "continuous") {
+    row <- tibble(
+      Variable = paste0("  ", label),
+      Overall  = fmt_mean_sd(df[[var]]),
+      Employed = fmt_mean_sd(df[[var]][df$retired == 0]),
+      Retired  = fmt_mean_sd(df[[var]][df$retired == 1])
+    )
+    bind_rows(header, row)
+
+  } else {
+    lvls <- sort(unique(na.omit(df[[var]])))
+    rows <- map_dfr(lvls, function(lvl) {
+      tibble(
+        Variable = paste0("  ", lvl),
+        # fmt_count bekommt jetzt Vektor + Level (kein == vorab)
+        Overall  = fmt_count(df[[var]],                   lvl),
+        Employed = fmt_count(df[[var]][df$retired == 0], lvl),
+        Retired  = fmt_count(df[[var]][df$retired == 1], lvl)
+      )
+    })
+    bind_rows(header, rows)
+  }
+})
+
+header_rows <- which(!grepl("^\\s", tab$Variable))
+
+colnames(tab) <- c(
+  "Variable",
+  paste0("Overall (N = ",  N_overall, ")"),
+  paste0("Employed (N = ", N_emp,     ")"),
+  paste0("Retired (N = ",  N_ret,     ")")
+)
+
+ft <- flextable(tab) |>
+  bold(i = header_rows, j = 1) |>
+  padding(i = setdiff(seq_len(nrow(tab)), header_rows),
+          j = 1, padding.left = 16) |>
+
+  padding(padding.top = 1, padding.bottom = 1, part = "body") |>
+  padding(padding.top = 2, padding.bottom = 2, part = "header") |>
+  hrule(rule = "exact", part = "body") |>
+  height(height = 0.4, part = "body") |>    # in cm — weiter reduzieren: 0.3
+  height(height = 0.5, part = "header") |>
+
+  width(j = 1, width = 2.6) |>
+  width(j = 2:4, width = 1.6) |>
+  bold(part = "header") |>
+  align(part = "header", align = "center") |>
+  align(j = 2:4, align = "center") |>
+  border_remove() |>
+  hline_top(part = "header",
+             border = officer::fp_border(width = 1.5)) |>
+  hline_bottom(part = "header",
+               border = officer::fp_border(width = 0.75)) |>
+  hline_bottom(part = "body",
+               border = officer::fp_border(width = 1.5)) |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 11, part = "all") |>
+  set_caption(
+    caption = "Table 1. Sample characteristics by retirement status"
+  ) |>
+  add_footer_lines(values = c(
+    "Notes: Continuous variables reported as Mean (SD). Categorical variables reported as N (%).",
+    "Percentages are calculated within each column. ANT = Attention Network Task; SDT = Signal Detection Task."
+  )) |>
+  italic(part = "footer") |>
+  fontsize(size = 10, part = "footer") |>
+  padding(padding.top = 1, padding.bottom = 1, part = "footer")
+
+ft
+
+ save_as_docx(ft, path = "sample_summary.docx")
+
+```
+
+
+## Variable Summary
+
+Table showing variable summary statistics.
+
+```{r prepare data}
+
+table_structure <- list(
+
+"1. Outcome Variables for Cognition" = c(
+  result_sdt = "Result Symbol Digit Test (SDT)",
+  result_ant = "Result Animal Naming Test (ANT)"
+  ),
+
+"2. Health Status" = c(
+  pcs = "Physical Health (SF12)",
+  mcs = "Mental Health (SF12)"
+  ),
+
+"3. Cognitive Stimulation" = c(
+  nr_close_friends = "Number of close friends",
+  hrs_chores_weekd = "Time Use: Household Chores",
+  hrs_childcare_weekd = "Time Use: Childcare",
+  hrs_edu_weekd = "Time Use: Education",
+  hrs_repair_weekd = "Time Use: Repairs and Gardening",
+  frq_sport = "Frequency: Sport", 
+  frq_classics = "Frequency: Classical Theater",
+  frq_cindisc = "Frequency: Cinema, Disco or Similar",   
+  frq_arts = "Frequency: Art, Music or Dance",
+  frq_voluntr = "Frequency: Volunteering"
+  ),
+
+"4. Covariates" = c(
+  age = "Age",
+  sex = "Sex", 
+  edu_time = "Years of Formal Education",
+  manual_worker = "Blue-collar Work",
+  married = "Marital Status"
+  )
+)
+
+get_stats <- function(v, retired){
+
+tibble(
+Mean = mean(v, na.rm=TRUE),
+SD = sd(v, na.rm=TRUE),
+Min = min(v, na.rm=TRUE),
+Max = max(v, na.rm=TRUE),
+N = sum(!is.na(v)),
+`Mean non-retirees` = mean(v[retired==0], na.rm=TRUE),
+`Mean retirees` = mean(v[retired==1], na.rm=TRUE),
+`t-Statistic` = as.numeric(t.test(v ~ retired)$statistic)
+)
+
+}
+
+```
+
+```{r}
+
+tab <- imap_dfr(table_structure, function(vars, panel){
+
+panel_header <- tibble(Variable = panel)
+
+rows <- imap_dfr(vars, function(label, var){
+
+get_stats(cog_test_sgl[[var]], cog_test_sgl$retired) |>
+mutate(Variable = label)
+
+})
+
+bind_rows(panel_header, rows)
+
+}) |>
+select(Variable, everything())
+
+
+```
+
+Generating Output
+
+```{r table out}
+
+tab_out <- datasummary_df(
+  tab,
+  fmt = 3,
+  output = "gt"
+) |>
+
+  # Paneltitel fett
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      rows = grepl("^[A-Z]\\.", Variable)
+    )
+  ) |>
+
+  tab_style(
+    style = cell_borders(
+      sides = "top",
+      weight = px(2)
+    ),
+    locations = cells_body(
+      rows = grepl("^[A-Z]\\.", Variable)
+    )
+  ) |>
+
+  fmt_integer(columns = c(N)) |>
+  fmt_number(
+    columns = c(Mean, SD, Min, Max, `Mean non-retirees`, `Mean retirees`, `t-Statistic`),
+    decimals = 2
+  ) |>
+
+  cols_width(
+    Variable ~ px(300),
+    everything() ~ px(100)
+  ) |>
+
+  tab_options(
+    table.border.top.width = px(2),
+    column_labels.border.bottom.width = px(1)
+  )
+
+tab_out
+```
+
+##2nd
+
+
+```{r}
+
+
+table_structure <- list(
+  "1. Outcome Variables for Cognition" = c(
+    result_sdt = "Result Symbol Digit Test (SDT)",
+    result_ant = "Result Animal Naming Test (ANT)"
+  ),
+  "2. Health Status" = c(
+    pcs = "Physical Health (SF12)",
+    mcs = "Mental Health (SF12)"
+  ),
+  "3. Cognitive Stimulation" = c(
+    nr_close_friends    = "Number of close friends",
+    hrs_chores_weekd    = "Time Use: Household Chores",
+    hrs_childcare_weekd = "Time Use: Childcare",
+    hrs_edu_weekd       = "Time Use: Education",
+    hrs_repair_weekd    = "Time Use: Repairs and Gardening",
+    frq_sport           = "Frequency: Sport",
+    frq_classics        = "Frequency: Classical Theater",
+    frq_cindisc         = "Frequency: Cinema, Disco or Similar",
+    frq_arts            = "Frequency: Art, Music or Dance",
+    frq_voluntr         = "Frequency: Volunteering"
+  ),
+  "4. Covariates" = c(
+    age           = "Age",
+    sex           = "Sex",
+    edu_time      = "Years of Formal Education",
+    manual_worker = "Blue-collar Work",
+    married       = "Marital Status"
+  )
+)
+
+get_stats <- function(v, retired) {
+  tt  <- tryCatch(t.test(v ~ retired), error = function(e) NULL)
+  tst <- if (!is.null(tt)) as.numeric(tt$statistic) else NA_real_
+  pv  <- if (!is.null(tt)) tt$p.value                else NA_real_
+  stars <- case_when(
+    is.na(pv)   ~ "",
+    pv < 0.001  ~ "***",
+    pv < 0.01   ~ "**",
+    pv < 0.05   ~ "*",
+    TRUE        ~ ""
+  )
+  tibble(
+    Mean               = mean(v, na.rm = TRUE),
+    SD                 = sd(v,   na.rm = TRUE),
+    Min                = min(v,  na.rm = TRUE),
+    Max                = max(v,  na.rm = TRUE),
+    N                  = sum(!is.na(v)),
+    `Mean non-retirees` = mean(v[retired == 0], na.rm = TRUE),
+    `Mean retirees`     = mean(v[retired == 1], na.rm = TRUE),
+    `t-Statistic`       = if_else(!is.na(tst),
+                            paste0(sprintf("%.2f", tst), stars),
+                            NA_character_)
+  )
+}
+
+tab <- imap_dfr(table_structure, function(vars, panel) {
+  panel_header <- tibble(Variable = panel)
+  rows <- imap_dfr(vars, function(label, var) {
+    get_stats(cog_test_sgl[[var]], cog_test_sgl$retired) |>
+      mutate(Variable = label)
+  })
+  bind_rows(panel_header, rows)
+}) |>
+  select(Variable, everything()) |>
+  mutate(across(c(Mean, SD, Min, Max,
+                  `Mean non-retirees`, `Mean retirees`),
+                \(x) if_else(!is.na(x), sprintf("%.2f", x), "")),
+         N = if_else(!is.na(N), as.character(N), ""),
+         `t-Statistic` = replace_na(`t-Statistic`, ""))
+
+header_rows <- which(grepl("^[0-9]\\.", tab$Variable))
+
+ft <- flextable(tab) |>
+
+  bold(i = header_rows, j = 1) |>
+  hline(i = header_rows,
+        border = officer::fp_border(width = 0.75),
+        part = "body") |>
+
+  padding(i = setdiff(seq_len(nrow(tab)), header_rows),
+          j = 1, padding.left = 14) |>
+
+  padding(padding.top = 1, padding.bottom = 1, part = "body") |>
+  padding(padding.top = 2, padding.bottom = 2, part = "header") |>
+  hrule(rule = "exact", part = "body") |>
+  height(height = 0.4, part = "body") |>
+  height(height = 0.5, part = "header") |>
+
+  width(j = 1, width = 2.8) |>
+  width(j = 2:9, width = 0.85) |>
+
+  # Ausrichtung
+  align(part = "header", align = "center") |>
+  align(j = 2:9, align = "center") |>
+  bold(part = "header") |>
+
+  border_remove() |>
+  hline_top(part = "header",
+             border = officer::fp_border(width = 1.5)) |>
+  hline_bottom(part = "header",
+               border = officer::fp_border(width = 0.75)) |>
+  hline_bottom(part = "body",
+               border = officer::fp_border(width = 1.5)) |>
+
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all") |>
+
+  set_caption(caption = "Table 2. Summary statistics by retirement status") |>
+  add_footer_lines(values = c(
+    "Notes: Mean and SD reported for all variables. t-Statistic from two-sample Welch t-test (employed vs. retired).",
+    "Significance levels: * p < 0.05, ** p < 0.01, *** p < 0.001."
+  )) |>
+  italic(part = "footer") |>
+  fontsize(size = 9, part = "footer") |>
+  padding(padding.top = 1, padding.bottom = 1, part = "footer")
+
+ft
+
+save_as_docx(ft, path = "variable_summary_stats.docx")
+
+```
+
+
+
+## Cognitive Performance over Time
+
+Plot showing the trajectory of fluid and crystallized intelligence over time in the analytic sample.
+
+
+```{r preparing data}
+
+
+
+df_long <- cog_test_svrl %>%
+  mutate(age_year = floor(age)) %>%
+  pivot_longer(
+    cols = c(result_ant, result_sdt),
+    names_to = "test",
+    values_to = "score"
+  )
+
+df_means <- df_long %>%
+  group_by(age_year, test) %>%
+  summarise(mean_score = mean(score, na.rm = TRUE),
+            .groups = "drop")
+
+df_sex <- df_long %>%
+  group_by(age_year, test, sex) %>%
+  summarise(mean_score = mean(score, na.rm = TRUE),
+            .groups = "drop")
+
+df_occ <- df_long %>%
+  group_by(age_year, test, manual_worker) %>%
+  summarise(mean_score = mean(score, na.rm = TRUE),
+            .groups = "drop")
+
+df_pens <- df_long %>%
+  group_by(age_year, test, retired) %>%
+  summarise(mean_score = mean(score, na.rm = TRUE),
+            .groups = "drop")
+
+```
+
+
+
+
+```{r sample out}
+
+
+perform <- ggplot(df_means, aes(x = age_year, y = mean_score)) +
+  
+  geom_smooth(
+    data = subset(df_means, test == "result_ant" & age_year >= 56),
+    aes(color = "Test 1"),
+    method = "loess",
+    se = FALSE
+  ) +
+
+  geom_smooth(
+    data = subset(df_means, test == "result_sdt"),
+    aes(color = "Test 2"),
+    method = "loess",
+    se = FALSE
+  ) +
+  
+  scale_color_manual(
+    values = c("#1B4F72", "#B03A2E"),
+    labels = c("ANT", "SDT")
+  ) +
+  
+  scale_x_continuous(
+    name = "Age (years)",
+    breaks = seq(min(df_means$age_year),
+                 max(df_means$age_year), by = 5)
+  ) +
+  
+  scale_y_continuous(
+    name = "Average Test Score",
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  
+  labs(
+    color = NULL,
+    title = "Test Performance by Age"
+  ) +
+  
+  theme_classic(base_size = 13) +
+  
+  theme(
+    legend.position = "top",
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+
+ggsave(
+  filename = "performance_time.png",
+  plot = perform,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+
+```
+
+
+## Factor Performance (Gender and Occupation)
+
+
+```{r factor sex}
+
+pgender <- ggplot(
+  df_sex %>% filter(!is.na(mean_score)),
+  aes(x = age_year, y = mean_score, color = factor(sex))
+) +
+
+  geom_smooth(
+    method = "loess",
+    se = FALSE,
+    linewidth = 1.3,
+    span = 0.6,
+    na.rm = TRUE
+  ) +
+
+  facet_wrap(
+    ~test,
+    labeller = labeller(
+      test = c("result_ant" = "ANT", "result_sdt" = "SDT")
+    ),
+    scales = "fixed"
+  ) +
+
+  scale_color_manual(
+    values = c("#1B4F72", "#B03A2E"),
+    labels = c("Men", "Women")
+  ) +
+
+  scale_x_continuous(
+    name = "Age (years)",
+    breaks = seq(min(df_sex$age_year, na.rm = TRUE),
+                 max(df_sex$age_year, na.rm = TRUE), by = 5)
+  ) +
+
+  scale_y_continuous(
+    name = "Average Test Score",
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+
+  labs(
+    color = NULL,
+    title = "Test Trajectories by Gender"
+  ) +
+
+  theme_bw(base_size = 13) +
+
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_line(color = "grey85"),
+    panel.grid.major.y = element_line(color = "grey85"),
+    panel.grid.minor = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+ggsave(
+  filename = "performance_gender.png",
+  plot = pgender,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+
+
+
+```{r factor occupation}
+
+pocc <- ggplot(
+  df_occ %>% 
+    filter(!is.na(mean_score), !is.na(manual_worker)),
+  aes(x = age_year, y = mean_score, color = factor(manual_worker))
+) +
+
+  geom_smooth(
+    method = "loess",
+    se = FALSE,
+    linewidth = 1.3,
+    span = 0.6,
+    na.rm = TRUE
+  ) +
+
+  facet_wrap(
+    ~test,
+    labeller = labeller(
+      test = c("result_ant" = "ANT", "result_sdt" = "SDT")
+    ),
+    scales = "fixed"
+  ) +
+
+  scale_color_manual(
+    values = c("#4D4D4D", "#2C7FB8"),
+    labels = c("White-collar workers", "Blue-collar workers"),
+    drop = TRUE
+  ) +
+
+  scale_x_continuous(
+    name = "Age (years)",
+    breaks = seq(min(df_occ$age_year, na.rm = TRUE),
+                 max(df_occ$age_year, na.rm = TRUE), by = 5)
+  ) +
+
+  scale_y_continuous(
+    name = "Average Test Score",
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+
+  labs(
+    color = NULL,
+    title = "Test Trajectory by Occupation"
+  ) +
+
+  theme_bw(base_size = 13) +
+
+  theme(
+    legend.position = "top",
+    panel.grid.major.x = element_line(color = "grey85"),
+    panel.grid.major.y = element_line(color = "grey85"),
+    panel.grid.minor = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+
+ggsave(
+  filename = "performance_occ.png",
+  plot = pocc,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+
+
+
+```{r factor retired, echo=F}
+
+ggplot(df_pens, aes(x = age_year, y = mean_score, color = factor(retired))) +
+  geom_point(alpha = 0.4) +
+  geom_line(alpha = 0.4) +
+  geom_smooth(se = FALSE, linewidth = 1.2) +
+  facet_wrap(~test) +
+  labs(
+    x = "Age",
+    y = "Average Test Score",
+    color = "Retired",
+    title = "Test Trajectories by Age and Retirement Status"
+  ) +
+  theme_minimal()
+
+```
+
+## Results with distance to retirement thresholds
+
+```{r prep distance to cutoff}
+
+#setting individual cutoffs
+
+
+df_cutoff <- cog_test_svrl %>%
+  
+  mutate(
+    early_dist = age - early,
+    sra_dist   = age - sra
+  ) %>%
+  
+  mutate(
+    early_dist = round(early_dist),
+    sra_dist   = round(sra_dist)
+  ) %>%
+  
+  pivot_longer(
+    cols = c(early_dist, sra_dist),
+    names_to = "cutoff",
+    values_to = "dist"
+  ) %>%
+  
+  filter(dist >= -5, dist <= 5) %>%
+  
+  pivot_longer(
+    cols = c(result_ant, result_sdt),
+    names_to = "test",
+    values_to = "score"
+  )
+
+
+df_cutoff_summary <- df_cutoff %>%
+  
+  group_by(cutoff, dist, test) %>%
+  
+  summarise(
+    mean_score = mean(score, na.rm = TRUE),
+    n = sum(!is.na(score)),
+    sd = sd(score, na.rm = TRUE),
+    se = sd / sqrt(n),
+    
+    ci_low  = mean_score - 1.96 * se,
+    ci_high = mean_score + 1.96 * se,
+    
+    .groups = "drop"
+  )
+
+```
+
+
+```{r plot distance cutoff}
+
+pcutoffs <- ggplot(
+  df_cutoff_summary %>% filter(!is.na(mean_score)),
+  aes(x = dist, y = mean_score)
+) +
+
+  geom_line(linewidth = 1.2, color = "#1B4F72") +
+
+  geom_point(size = 2.5, color = "#1B4F72") +
+
+  geom_errorbar(
+    aes(ymin = ci_low, ymax = ci_high),
+    width = 0.15,
+    linewidth = 0.8,
+    color = "#1B4F72"
+  ) +
+
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "grey40"
+  ) +
+
+  facet_grid(
+    test ~ cutoff,
+    labeller = labeller(
+      test = c("result_ant" = "ANT", "result_sdt" = "SDT"),
+      cutoff = c("early_dist" = "Early Retirement Age",
+                 "sra_dist"   = "Statutory Retirement Age")
+    )
+  ) +
+
+  scale_x_continuous(
+    name = "Distance to Threshold (years)",
+    breaks = -5:5
+  ) +
+
+  scale_y_continuous(
+    name = "Average Test Score",
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+
+  labs(
+    title = "Test Performance Around Retirement Cutoffs"
+  ) +
+
+  theme_classic(base_size = 13) +
+
+  theme(
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+ggsave(
+  filename = "performance_cutoffs.png",
+  plot = pcutoffs,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+
+```
+
+
+
+
+```{r}
+
+ggplot(check, aes(x = sra_dist, y = result_sdt)) +
+  stat_summary_bin(fun = mean, bins = 30, geom = "point",
+                   size = 2, color = "black") +
+  
+  geom_smooth(data = subset(check, sra_dist < 0),
+              method = "lm", formula = y ~ x,
+              se = FALSE, color = "black", linewidth = 0.8) +
+  
+  geom_smooth(data = subset(check, sra_dist >= 0),
+              method = "lm", formula = y ~ x,
+              se = FALSE, color = "black", linewidth = 0.8) +
+  
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.7) +
+  
+  labs(
+    x = "Distance to Statutory Retirement Age (years)",
+    y = "Average SDT Score"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  
+  theme(
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.grid = element_blank()
+  )
+```
+
+
+
+```{r, include=F, echo=F}
+
+ggplot(df_cutoff, aes(x = dist, y = score)) +
+
+  geom_smooth(
+    data = subset(df_cutoff, dist < 0),
+    method = "loess",
+    se = FALSE,
+    color = "#B03A2E"
+  ) +
+
+  geom_smooth(
+    data = subset(df_cutoff, dist >= 0),
+    method = "loess",
+    se = FALSE,
+    color = "#2C7FB8"
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  
+  facet_grid(test ~ cutoff)
+```
+
+
+## Treatment Heterogeneity
+
+```{r, echo=F, include=F}
+ggplot(cog_test_sgl, aes(x = sra_dist, y = result_sdt, color = factor(manual_worker))) +
+  geom_point(alpha = 0.2) +
+  
+  geom_smooth(
+    data = subset(cog_test_sgl, sra_dist < 0),
+    method = "lm",
+    se = FALSE
+  ) +
+  
+  geom_smooth(
+    data = subset(cog_test_sgl, sra_dist >= 0),
+    method = "lm",
+    se = FALSE
+  ) +
+  
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  
+  labs(
+    x = "Distance to Retirement Age",
+    y = "SDT Score",
+    color = "Blue Collar"
+  ) +
+  
+  theme_minimal()
+
+```
+
+```{r}
+
+# Bandwidth 
+bw <- 5
+
+data_plot <- cog_test_sgl %>%
+  filter(abs(sra_dist) <= bw)
+
+# Binning  running variable
+bin_width <- 0.5
+
+data_plot <- data_plot %>%
+  mutate(
+    bin = floor(sra_dist / bin_width) * bin_width,
+    gender = ifelse(sex == 1, "Female", "Male"),
+    occupation = ifelse(manual_worker == 1, "Blue-collar", "White-collar")
+  )
+
+binned_gender <- data_plot %>%
+  group_by(bin, gender) %>%
+  summarise(score = mean(result_sdt), .groups = "drop")
+
+binned_occ <- data_plot %>%
+  group_by(bin, occupation) %>%
+  summarise(score = mean(result_sdt), .groups = "drop")
+
+# Plot Gender
+p_gender <- ggplot(data_plot, aes(x = sra_dist, y = result_sdt, color = gender)) +
+
+  geom_point(data = binned_gender,
+             aes(x = bin, y = score),
+             size = 2) +
+
+  geom_smooth(
+    data = subset(data_plot, sra_dist < 0),
+    method = "lm",
+    se = FALSE
+  ) +
+
+  geom_smooth(
+    data = subset(data_plot, sra_dist >= 0),
+    method = "lm",
+    se = FALSE
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dashed") +
+
+  labs(
+    title = "A: Cognitive Test Scores by Gender",
+    x = "Distance to Statutory Retirement Age",
+    y = "SDT Score",
+    color = ""
+  ) +
+
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Plot Occupation
+p_occ <- ggplot(data_plot, aes(x = sra_dist, y = result_sdt, color = occupation)) +
+
+  geom_point(data = binned_occ,
+             aes(x = bin, y = score),
+             size = 2) +
+
+  geom_smooth(
+    data = subset(data_plot, sra_dist < 0),
+    method = "lm",
+    se = FALSE
+  ) +
+
+  geom_smooth(
+    data = subset(data_plot, sra_dist >= 0),
+    method = "lm",
+    se = FALSE
+  ) +
+
+  geom_vline(xintercept = 0, linetype = "dashed") +
+
+  labs(
+    title = "B: Cognitive Test Scores by Occupation",
+    x = "Distance to Statutory Retirement Age",
+    y = "SDT Score",
+    color = ""
+  ) +
+
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Panels 
+
+final_plot <- p_gender + p_occ
+
+final_plot
+
+```
+
+
+```{r first plot}
+
+
+colors_gender <- c("Women" = "#B03A2E", "Men" = "#1B4F72")
+colors_occ    <- c("Blue-collar" = "#2C7FB8", "White-collar" = "#4D4D4D")
+
+# Bandwidth
+bw <- 5
+
+make_plots <- function(outcome_var, y_label, panel_labels) {
+  
+  data_plot <- cog_test_sgl %>%
+    filter(abs(sra_dist) <= bw) %>%
+    filter(!is.na(.data[[outcome_var]]),
+           !is.na(sra_dist),
+           !is.na(sex),
+           !is.na(manual_worker)) %>%
+    mutate(
+      bin        = floor(sra_dist / 0.5) * 0.5,
+      gender     = ifelse(sex == 1, "Women", "Men"),
+      occupation = ifelse(manual_worker == 1, "Blue-collar", "White-collar")
+    )
+  
+  binned_gender <- data_plot %>%
+    group_by(bin, gender) %>%
+    summarise(score = mean(.data[[outcome_var]]), .groups = "drop")
+  
+  binned_occ <- data_plot %>%
+    group_by(bin, occupation) %>%
+    summarise(score = mean(.data[[outcome_var]]), .groups = "drop")
+  
+  # Theme
+  plot_theme <- theme_classic() +
+    theme(
+      legend.position    = "bottom",
+      legend.title       = element_blank(),
+      legend.text        = element_text(size = 10),
+      axis.title         = element_text(size = 10),
+      axis.text          = element_text(size = 9),
+      plot.title         = element_text(size = 11, face = "bold"),
+      panel.grid.major.y = element_line(color = "grey90", linewidth = 0.3),
+      panel.grid.major.x = element_blank()
+    )
+  
+  # Gender Plot
+  p_gender <- ggplot(data_plot,
+                     aes(x = sra_dist, y = .data[[outcome_var]], color = gender)) +
+    geom_point(data = binned_gender,
+               aes(x = bin, y = score),
+               size = 2, alpha = 0.8) +
+    geom_smooth(data = subset(data_plot, sra_dist < 0),
+                aes(color = gender, fill = gender),
+                method = "lm", se = TRUE, alpha = 0.15, linewidth = 0.8) +
+    geom_smooth(data = subset(data_plot, sra_dist >= 0),
+                aes(color = gender, fill = gender),
+                method = "lm", se = TRUE, alpha = 0.15, linewidth = 0.8) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey40") +
+    scale_color_manual(values = colors_gender) +
+    scale_fill_manual(values  = colors_gender) +
+    labs(title = paste0(panel_labels[1], ": Cognitive Test Scores by Gender"),
+         x = "Distance to Statutory Retirement Age",
+         y = y_label) +
+    plot_theme
+  
+  # Occupation Plot
+  p_occ <- ggplot(data_plot,
+                  aes(x = sra_dist, y = .data[[outcome_var]], color = occupation)) +
+    geom_point(data = binned_occ,
+               aes(x = bin, y = score),
+               size = 2, alpha = 0.8) +
+    geom_smooth(data = subset(data_plot, sra_dist < 0),
+                aes(color = occupation, fill = occupation),
+                method = "lm", se = TRUE, alpha = 0.15, linewidth = 0.8) +
+    geom_smooth(data = subset(data_plot, sra_dist >= 0),
+                aes(color = occupation , fill = occupation),
+                method = "lm", se = TRUE, alpha = 0.15, linewidth = 0.8) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey40") +
+    scale_color_manual(values = colors_occ) +
+    scale_fill_manual(values  = colors_occ) +
+    labs(title = paste0(panel_labels[2], ": Cognitive Test Scores by Occupation"),
+         x = "Distance to Statutory Retirement Age",
+         y = y_label) +
+    plot_theme
+  
+  list(gender = p_gender, occ = p_occ)
+}
+
+plots_sdt <- make_plots("result_sdt", "SDT Score",  c("A", "B"))
+plots_ant <- make_plots("result_ant", "ANT Score",  c("C", "D"))
+
+# 2x2 Layout
+final_plot <- (plots_sdt$gender + plots_sdt$occ) /
+              (plots_ant$gender + plots_ant$occ)
+  
+
+ggsave("heterogeneity_plots_fin.png",
+       plot   = final_plot,
+       width  = 8,
+       height = 8,
+       dpi    = 300,
+       bg     = "white") #w=10, h=8
+
+final_plot
+
+
+ggsave(
+  filename = "ttest_sdt_63.png",
+  plot = p1,
+  width = 6,
+  height = 4,
+  dpi = 300
+)
+```
+
+

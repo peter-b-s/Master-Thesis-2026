@@ -1,0 +1,671 @@
+---
+title: "detail_tables"
+author: "ID_234731"
+date: "2026-04-15"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages, include = F}
+library(dplyr)
+library (tidyverse) 
+library(ggplot2)
+library(haven)
+library(zoo)
+library(stargazer)
+library(corrplot)
+library(psych)
+library(modelsummary)
+library(rdrobust)
+library(rddtools)
+library(fixest)
+library(purrr)
+library(gt)
+library(sandwich)
+library(lmtest)
+library(kableExtra)
+library(flextable)
+library(officer)
+```
+
+```{r load data, include = F}
+
+cog_test_sgl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_sgl.rds")
+
+cog_test_svrl <- readRDS("[...] Master Thesis/Masterthesis/cog_test_svrl.rds")
+
+```
+
+
+## Comparing Models for SRA: Retirement on Cognition
+
+```{r prep}
+
+df <- cog_test_sgl %>% select(result_ant, result_sdt, long_retired, eligible_sra, eligible_early)
+
+
+# OLS
+ols_test1 <- lm(result_ant ~ long_retired, data = df) #+ X + controls ?
+ols_test2 <- lm(result_sdt ~ long_retired, data = df)
+
+# Reduced form
+rf_test1 <- lm(result_ant ~ eligible_sra, data = df)
+rf_test2 <- lm(result_sdt ~ eligible_sra, data = df)
+
+# First stage
+first_stage <- lm(long_retired ~ eligible_sra, data = df)
+df <- df[rownames(first_stage$model), ]
+df$D_hat <- predict(first_stage)
+
+
+# second stage
+iv_test1 <- lm(result_ant ~ D_hat, data = df)
+iv_test2 <- lm(result_sdt ~ D_hat, data = df)
+
+
+vcov_list <- list(
+  vcovHC(ols_test1, type = "HC1"),
+  vcovHC(ols_test2, type = "HC1"),
+  vcovHC(rf_test1, type = "HC1"),
+  vcovHC(rf_test2, type = "HC1"),
+  vcovHC(iv_test1, type = "HC1"),
+  vcovHC(iv_test2, type = "HC1")
+)
+```
+
+```{r coeff}
+# kleibergen paap
+fs_robust <- coeftest(first_stage, vcov = vcovHC(first_stage, type="HC1"))
+
+beta_z <- fs_robust["eligible_sra",1]
+se_z   <- fs_robust["eligible_sra",2]
+
+kp_F <- (beta_z / se_z)^2
+
+# first stage
+
+fs_F_inst <- (coef(first_stage)["eligible_sra"] /
+              sqrt(vcov(first_stage)["eligible_sra","eligible_sra"]))^2
+
+# wu hausman endogeneity
+df$res_fs <- resid(first_stage)
+
+hausman_test1 <- lm(result_ant ~ long_retired + res_fs, data = df)
+hausman_test2 <- lm(result_sdt ~ long_retired + res_fs, data = df)
+
+wu1 <- coeftest(
+  hausman_test1,
+  vcov = vcovHC(hausman_test1, type="HC1")
+)["res_fs","t value"]^2
+
+wu2 <- coeftest(
+  hausman_test2,
+  vcov = vcovHC(hausman_test2, type="HC1")
+)["res_fs","t value"]^2
+
+# other statistics
+#N <- nobs(m_iv)
+mean_y1 <- mean(df$result_ant, na.rm = TRUE)
+mean_y2 <- mean(df$result_sdt, na.rm = TRUE)
+```
+
+
+
+```{r list}
+models <- list(
+
+  "ANT" = ols_test1,
+  "SDT" = ols_test2,
+
+  "ANT" = rf_test1,
+  "SDT" = rf_test2,
+
+  "ANT" = iv_test1,
+  "SDT" = iv_test2
+)
+
+```
+
+
+
+```{r rows}
+extra_rows <- data.frame(
+
+  term = c(
+    "First-stage F",
+    "Kleibergen-Paap Wald F",
+    "Wu-Hausman",
+    "Mean dep. var."
+  ),
+
+  `OLS test1` = c("", "", "", round(mean_y1,3)),
+  `OLS test2` = c("", "", "", round(mean_y2,3)),
+
+  `RF test1` = c("", "", "", ""),
+  `RF test2` = c("", "", "", ""),
+
+  `2SLS test1` = c(
+    round(fs_F_inst,2),
+    round(kp_F,2),
+    round(wu1,2),
+    ""
+  ),
+
+  `2SLS test2` = c(
+    round(fs_F_inst,2),
+    round(kp_F,2),
+    round(wu2,2),
+    ""
+  )
+)
+```
+
+
+```{r sum}
+modelsummary(
+
+  models,
+
+  vcov = vcov_list,
+
+  statistic = "({std.error})",
+
+  stars = c('*'=0.1,'**'=0.05,'***'=0.01),
+
+  coef_rename = c(
+    "D" = "Treatment",
+    "D_hat" = "Treatment",
+    "Z" = "Cutoff indicator"
+  ),
+
+  gof_omit = "AIC|BIC|Log|Adj",
+
+  add_rows = extra_rows
+
+)
+```
+
+
+
+```{r tab}
+tab <- tab |>
+  border_remove() |>
+  hline_top(border    = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "body") |>
+  add_header_row(
+    values    = c("", "OLS", "RF", "2SLS"),
+    colwidths = c(1, 2, 2, 2)
+  ) |>
+  hline_top(border = fp_border(width = 1.5), part = "header") |>
+  align(i = 1, align = "center", part = "header") |>
+  align(i = 2, align = "center", part = "header") |>
+  align(align = "center", part = "body") |>
+  align(j = 1, align = "left", part = "all") |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all") |>
+  add_footer_lines("Robust standard errors in parentheses. ANT = Result of Animal Naming Test, SDT = Result of Symbol Digit Test
+                    long_retired	= Dummy indicator for being retired for more than one year, 
+                    eligible_sra = Dummy indicator showing eligibility for statutory retirement age. 
+                    All models are estimated without control variables.                   
+                   * p<0.1, ** p<0.05, *** p<0.01.") |>
+  font(fontname = "Times New Roman", part = "footer") |>
+  fontsize(size = 9, part = "footer") |>
+  # Spaltenbreiten manuell setzen statt autofit()
+  width(j = 1, width = 2.0) |>   # Variablenspalte
+  width(j = 2:7, width = 1.0)    # Datenspalten
+
+doc <- read_docx() |> body_add_flextable(tab)
+print(doc, target = "table_ols_rd_iv.docx")
+```
+
+
+## Comparing Models for ERA: Retirement on Cognition
+
+```{r prep}
+
+df <- cog_test_sgl %>% select(result_ant, result_sdt, long_retired, eligible_sra, eligible_early)
+
+
+# OLS
+ols_test1 <- lm(result_ant ~ long_retired, data = df) 
+ols_test2 <- lm(result_sdt ~ long_retired, data = df)
+
+# Reduced form
+rf_test1 <- lm(result_ant ~ eligible_early, data = df)
+rf_test2 <- lm(result_sdt ~ eligible_early, data = df)
+
+# First stage
+first_stage <- lm(long_retired ~ eligible_early, data = df)
+df <- df[rownames(first_stage$model), ]
+df$D_hat <- predict(first_stage)
+
+
+# second stage
+iv_test1 <- lm(result_ant ~ D_hat, data = df)
+iv_test2 <- lm(result_sdt ~ D_hat, data = df)
+
+
+vcov_list <- list(
+  vcovHC(ols_test1, type = "HC1"),
+  vcovHC(ols_test2, type = "HC1"),
+  vcovHC(rf_test1, type = "HC1"),
+  vcovHC(rf_test2, type = "HC1"),
+  vcovHC(iv_test1, type = "HC1"),
+  vcovHC(iv_test2, type = "HC1")
+)
+```
+
+```{r coeff}
+# kleibergen paap
+fs_robust <- coeftest(first_stage, vcov = vcovHC(first_stage, type="HC1"))
+
+beta_z <- fs_robust["eligible_early",1]
+se_z   <- fs_robust["eligible_early",2]
+
+kp_F <- (beta_z / se_z)^2
+
+# first stage
+
+fs_F_inst <- (coef(first_stage)["eligible_early"] /
+              sqrt(vcov(first_stage)["eligible_early","eligible_early"]))^2
+
+# wu hausman endogeneity
+df$res_fs <- resid(first_stage)
+
+hausman_test1 <- lm(result_ant ~ long_retired + res_fs, data = df)
+hausman_test2 <- lm(result_sdt ~ long_retired + res_fs, data = df)
+
+wu1 <- coeftest(
+  hausman_test1,
+  vcov = vcovHC(hausman_test1, type="HC1")
+)["res_fs","t value"]^2
+
+wu2 <- coeftest(
+  hausman_test2,
+  vcov = vcovHC(hausman_test2, type="HC1")
+)["res_fs","t value"]^2
+
+# other statistics
+#N <- nobs(m_iv)
+mean_y1 <- mean(df$result_ant, na.rm = TRUE)
+mean_y2 <- mean(df$result_sdt, na.rm = TRUE)
+```
+
+```{r list}
+models <- list(
+
+  "ANT" = ols_test1,
+  "SDT" = ols_test2,
+
+  "ANT" = rf_test1,
+  "SDT" = rf_test2,
+
+  "ANT" = iv_test1,
+  "SDT" = iv_test2
+)
+
+```
+
+
+
+```{r rows}
+extra_rows <- data.frame(
+
+  term = c(
+    "First-stage F",
+    "Kleibergen-Paap Wald F",
+    "Wu-Hausman",
+    "Mean dep. var."
+  ),
+
+  `OLS test1` = c("", "", "", round(mean_y1,3)),
+  `OLS test2` = c("", "", "", round(mean_y2,3)),
+
+  `RF test1` = c("", "", "", ""),
+  `RF test2` = c("", "", "", ""),
+
+  `2SLS test1` = c(
+    round(fs_F_inst,2),
+    round(kp_F,2),
+    round(wu1,2),
+    ""
+  ),
+
+  `2SLS test2` = c(
+    round(fs_F_inst,2),
+    round(kp_F,2),
+    round(wu2,2),
+    ""
+  )
+)
+```
+
+
+```{r sum}
+tab_era <-modelsummary(
+
+  models,
+
+  vcov = vcov_list,
+
+  statistic = "({std.error})",
+
+  stars = c('*'=0.1,'**'=0.05,'***'=0.01),
+
+  coef_rename = c(
+    "D" = "Treatment",
+    "D_hat" = "Treatment",
+    "Z" = "Cutoff indicator"
+  ),
+
+  gof_omit = "AIC|BIC|Log|Adj",
+
+  add_rows = extra_rows, 
+  
+  output = "flextable"
+
+)
+```
+
+
+```{r tab}
+tab_era <- tab_era |>
+  border_remove() |>
+  hline_top(border    = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "header") |>
+  hline_bottom(border = fp_border(width = 1.5), part = "body") |>
+  add_header_row(
+    values    = c("", "OLS", "RF", "2SLS"),
+    colwidths = c(1, 2, 2, 2)
+  ) |>
+  hline_top(border = fp_border(width = 1.5), part = "header") |>
+  align(i = 1, align = "center", part = "header") |>
+  align(i = 2, align = "center", part = "header") |>
+  align(align = "center", part = "body") |>
+  align(j = 1, align = "left", part = "all") |>
+  font(fontname = "Times New Roman", part = "all") |>
+  fontsize(size = 10, part = "all") |>
+  add_footer_lines("Robust standard errors in parentheses. ANT = Result of Animal Naming Test, SDT = Result of Symbol Digit Test
+                    long_retired	= Dummy indicator for being retired for more than one year, 
+                    eligible_early = Dummy indicator showing eligibility for early retirement age. 
+                    All models are estimated without control variables.                   
+                   * p<0.1, ** p<0.05, *** p<0.01.") |>
+  font(fontname = "Times New Roman", part = "footer") |>
+  fontsize(size = 9, part = "footer") |>
+  # Spaltenbreiten manuell setzen statt autofit()
+  width(j = 1, width = 2.0) |>   # Variablenspalte
+  width(j = 2:7, width = 1.0)    # Datenspalten
+
+doc <- read_docx() |> body_add_flextable(tab_era)
+
+print(doc, target = "table_ols_rd_iv_era.docx")
+```
+
+
+## RD Mediation analysis 
+
+
+```{r}
+
+coef_labels <- c(
+  "retired"             = "Retired",
+  "eligible_sra"        = "Eligible SRA",
+  "sra_dist"            = "Age (centered)",
+  "eligible_sra:sra_dist" = "Eligible SRA × Age",
+  "sex"                 = "Gender",
+  "edu_time"            = "Education (yrs)",
+  "manual_worker"       = "Blue-collar Work",
+  "married"             = "Married",
+  "hrs_chores_weekd"    = "Hrs Chores",
+  "hrs_childcare_weekd" = "Hrs Childcare",
+  "hrs_edu_weekd"       = "Hrs Education",
+  "hrs_repair_weekd"    = "Hrs Repairs",
+  "frq_classics"        = "Freq. Classics",
+  "frq_cindisc"         = "Freq. Cinema/Disco"
+)
+
+# Rows to report (in order) — factor(syear) dummies excluded
+report_vars <- c(
+  "retired",
+  "eligible_sra",
+  "sra_dist",
+  "eligible_sra:sra_dist",
+  "sex",
+  "edu_time",
+  "manual_worker",
+  "married",
+  "hrs_chores_weekd",
+  "hrs_childcare_weekd",
+  "hrs_edu_weekd",
+  "hrs_repair_weekd",
+  "frq_classics",
+  "frq_cindisc"
+)
+
+
+base_controls <- "retired + eligible_sra + eligible_sra:sra_dist + sra_dist +
+                   factor(syear) + sex + edu_time + manual_worker + married"
+
+mediators <- "+ hrs_chores_weekd + hrs_childcare_weekd + hrs_edu_weekd +
+               hrs_repair_weekd + frq_classics + frq_cindisc"
+
+f_m1_ant <- as.formula(paste("result_ant ~", base_controls))
+f_m2_ant <- as.formula(paste("result_ant ~", base_controls, mediators))
+f_m1_sdt <- as.formula(paste("result_sdt ~", base_controls))
+f_m2_sdt <- as.formula(paste("result_sdt ~", base_controls, mediators))
+
+
+cog_test_sgl$weight_sra <- pmax(0,1 - abs(cog_test_sgl$sra_dist) / 5)
+
+
+fit_model <- function(formula, df) {
+  tryCatch(
+    lm(formula, data = df, weights = df$weight_sra),
+    error = function(e) {
+      cat("Fehler:", conditionMessage(e), "\n")
+      NULL
+    }
+  )
+}
+
+m1_ant <- fit_model(f_m1_ant, cog_test_sgl)
+m2_ant <- fit_model(f_m2_ant, cog_test_sgl)
+m1_sdt <- fit_model(f_m1_sdt, cog_test_sgl)
+m2_sdt <- fit_model(f_m2_sdt, cog_test_sgl)
+
+
+extract_coefs <- function(mod) {
+  if (is.null(mod)) return(NULL)
+  res <- tryCatch(
+    coeftest(mod, vcov = vcovHC(mod, type = "HC1")),
+    error = function(e) NULL
+  )
+  res
+}
+
+res_m1_ant <- extract_coefs(m1_ant)
+res_m2_ant <- extract_coefs(m2_ant)
+res_m1_sdt <- extract_coefs(m1_sdt)
+res_m2_sdt <- extract_coefs(m2_sdt)
+
+
+fmt_coef <- function(res, varname) {
+  if (is.null(res)) return(list(coef = "—", se = ""))
+  rn  <- rownames(res)
+  idx <- which(rn == varname)
+  if (length(idx) == 0) return(list(coef = "", se = ""))
+
+  b  <- res[idx, 1]
+  se <- res[idx, 2]
+  p  <- res[idx, 4]
+  stars <- ifelse(p < 0.01, "***",
+           ifelse(p < 0.05, "**",
+           ifelse(p < 0.1,  "*", "")))
+
+  list(
+    coef = paste0(round(b, 3), stars),
+    se   = paste0("(", round(se, 3), ")")
+  )
+}
+
+
+# Two rows per variable: coefficient + SE
+rows <- list()
+
+for (v in report_vars) {
+
+  label <- coef_labels[v]
+
+  c1 <- fmt_coef(res_m1_ant, v)
+  c2 <- fmt_coef(res_m2_ant, v)
+  c3 <- fmt_coef(res_m1_sdt, v)
+  c4 <- fmt_coef(res_m2_sdt, v)
+
+  all_empty <- all(c(c1$coef, c2$coef, c3$coef, c4$coef) == "")
+  if (all_empty) next
+
+  # Coefficient row
+  rows[[length(rows) + 1]] <- data.frame(
+    term = label,
+    ant_m1 = c1$coef,
+    ant_m2 = c2$coef,
+    sdt_m1 = c3$coef,
+    sdt_m2 = c4$coef,
+    stringsAsFactors = FALSE
+  )
+
+  # SE row
+  rows[[length(rows) + 1]] <- data.frame(
+    term   = "",
+    ant_m1 = c1$se,
+    ant_m2 = c2$se,
+    sdt_m1 = c3$se,
+    sdt_m2 = c4$se,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Observations row
+n_row <- data.frame(
+  term   = "Observations",
+  ant_m1 = ifelse(!is.null(m1_ant), formatC(nobs(m1_ant), format = "d", big.mark = ","), "—"),
+  ant_m2 = ifelse(!is.null(m2_ant), formatC(nobs(m2_ant), format = "d", big.mark = ","), "—"),
+  sdt_m1 = ifelse(!is.null(m1_sdt), formatC(nobs(m1_sdt), format = "d", big.mark = ","), "—"),
+  sdt_m2 = ifelse(!is.null(m2_sdt), formatC(nobs(m2_sdt), format = "d", big.mark = ","), "—"),
+  stringsAsFactors = FALSE
+)
+
+# Year FE indicator row
+fe_row <- data.frame(
+  term   = "Year FE",
+  ant_m1 = "Yes", ant_m2 = "Yes",
+  sdt_m1 = "Yes", sdt_m2 = "Yes",
+  stringsAsFactors = FALSE
+)
+
+# Mediators indicator row
+med_row <- data.frame(
+  term   = "Mediators",
+  ant_m1 = "No",  ant_m2 = "Yes",
+  sdt_m1 = "No",  sdt_m2 = "Yes",
+  stringsAsFactors = FALSE
+)
+
+df_table <- do.call(rbind, rows)
+df_table <- rbind(df_table, fe_row, med_row, n_row)
+
+# check
+#print(df_table)
+
+n_coef_rows  <- nrow(df_table) - 3          # all except last 3 stat rows
+se_rows      <- which(df_table$term == "")   # SE rows (empty term)
+stat_rows    <- (nrow(df_table) - 2):nrow(df_table)  # Year FE, Mediators, N
+mediator_start <- which(df_table$term == coef_labels["hrs_chores_weekd"])
+
+mediator_rows <- if (length(mediator_start) > 0) {
+  mediator_start:min(mediator_start + 11, n_coef_rows)
+} else integer(0)
+
+term_w <- 1800
+col_w  <- floor((9026 - term_w) / 4)
+
+ft <- flextable(df_table) %>%
+
+  # Top header: outcome groups
+  add_header_row(
+    values    = c("", "ANT", "SDT"),
+    colwidths = c(1, 2, 2)
+  ) %>%
+
+  # Column labels
+  set_header_labels(
+    term   = "",
+    ant_m1 = "Model 1",
+    ant_m2 = "Model 2",
+    sdt_m1 = "Model 1",
+    sdt_m2 = "Model 2"
+  ) %>%
+
+  theme_booktabs() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 9,  part = "body") %>%
+  fontsize(size = 10, part = "header") %>%
+
+  align(align = "center", part = "header") %>%
+  align(j = 1, align = "left",   part = "body") %>%
+  align(j = 2:5, align = "center", part = "body") %>%
+  bold(i = 1:2, part = "header") %>%
+  color(i = se_rows, color = "#555555", part = "body") %>%
+  fontsize(i = se_rows, size = 8, part = "body") %>%
+  bg(i = stat_rows, bg = "#F5F5F5", part = "body") %>%
+  italic(i = stat_rows, part = "body") %>%
+  bg(i = mediator_rows, bg = "#EEF4FB", part = "body") %>%
+  hline(
+    i      = min(stat_rows) - 1,
+    border = fp_border(color = "#888888", width = 0.75),
+    part   = "body"
+  ) %>%
+
+  hline(
+    i      = max(0, mediator_start - 1),
+    border = fp_border(color = "#AAAAAA", width = 0.5),
+    part   = "body"
+  ) %>%
+
+  width(j = 1, width = term_w / 1440) %>%
+  width(j = 2:5, width = col_w / 1440) %>%
+
+  # notes
+  add_footer_lines(values = paste(
+    "Notes: Robust standard errors (HC1) in parentheses.",
+    "Model 1 = base RD specification with year fixed effects and sociodemographic controls.",
+    "Model 2 = Model 1 plus significant mediators from mechanism analysis",
+    "(hrs_chores_weekd, hrs_childcare_weekd, hrs_edu_weekd, hrs_repair_weekd,",
+    "frq_classics, frq_cindisc).",
+    "ANT = Animal Naming Test; SDT = Symbol Digit Test.",
+    "Retired is instrumented by eligible_sra.",
+    "* p<0.1, ** p<0.05, *** p<0.01."
+  )) %>%
+  font(fontname = "Times New Roman", part = "footer") %>%
+  fontsize(size = 9, part = "footer") %>%
+  italic(part = "footer")
+
+doc <- read_docx() %>%
+  body_add_par(
+    "Table: Mediation Analysis — Effect of Retirement on Cognitive Outcomes",
+    style = "heading 1"
+  ) %>%
+  body_add_flextable(ft)
+
+print(doc, target = "mediation_analysis.docx")
+cat("\nSaved: mediation_analysis.docx\n")
+
+```
+
+
